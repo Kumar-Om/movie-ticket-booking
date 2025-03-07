@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title><%= movie.title %> - Book Tickets</title>
+    <link rel="stylesheet" href="/css/movies.css">
+</head>
+<body>
+    <div class="movie-container">
+        <h1><%= movie.title %></h1>
+        <div class="movie-image-container">
+            <img src="<%= movie.image %>" alt="<%= movie.title %>" class="movie-image">
+        </div>
+        <p>Rating: <%= movie.rating %></p>
+        <p>Available Tickets: <%= 100 - movie.total_seats_booked %></p>
+        
+        <form action="/book" method="POST">
+            <input type="hidden" name="movieId" value="<%= movie.id %>">
+            <label>Number of Seats:</label>
+            <input type="number" name="seats" min="1" max="<%= 100 - movie.total_seats_booked %>" required>
+            <button type="submit">Book Now</button>
+        </form>
+    </div>
+</body>
+</html>

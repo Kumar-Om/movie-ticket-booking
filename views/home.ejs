@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Movie Booking</title>
+    <link rel="stylesheet" href="/css/home.css">
+</head>
+<body>
+    <h1>Available Movies</h1>
+    <ul>
+        <% movies.forEach(movie => { %>
+            <li>
+                <img src="<%= movie.image %>" alt="<%= movie.title %>" width="100">
+                <h2><a href="/movies/<%= movie.id %>"><%= movie.title %></a></h2>
+                <p>Rating: <%= movie.rating %></p>
+            </li>
+        <% }) %>
+    </ul>
+</body>
+</html>

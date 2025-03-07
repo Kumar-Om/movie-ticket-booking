@@ -1,0 +1,50 @@
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f0f0f0;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh; /* Make sure the content is centered vertically even if it's short */
+}
+
+.confirmation-container {
+    background-color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    padding: 30px;
+    text-align: center;
+    max-width: 600px;
+    width: 100%; /* Ensure it takes up the full width of its parent */
+}
+
+h1 {
+    color: #e50914;
+    margin-bottom: 20px;
+}
+
+p {
+    margin: 10px 0;
+    font-size: 16px;
+}
+
+strong {
+    font-weight: bold;
+}
+
+a {
+    color: #e50914;
+    text-decoration: none;
+    display: inline-block;
+    margin-top: 20px;
+    padding: 10px 20px;
+    border: 1px solid #e50914;
+    border-radius: 4px;
+    transition: background-color 0.3s;
+}
+
+a:hover {
+    background-color: #e50914;
+    color: white;
+}
