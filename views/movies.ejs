@@ -11,14 +11,37 @@
             <img src="<%= movie.image %>" alt="<%= movie.title %>" class="movie-image">
         </div>
         <p>Rating: <%= movie.rating %></p>
-        <p>Available Tickets: <%= 100 - movie.total_seats_booked %></p>
+        <p>Available Seats: <%= 100 - movie.total_seats_booked %></p>
         
+        <div class="screen">SCREEN</div>
         <form action="/book" method="POST">
             <input type="hidden" name="movieId" value="<%= movie.id %>">
-            <label>Number of Seats:</label>
-            <input type="number" name="seats" min="1" max="<%= 100 - movie.total_seats_booked %>" required>
-            <button type="submit">Book Now</button>
+            <div class="seat-map">
+                <% if (typeof seats !== 'undefined' && seats.length > 0) { %>
+                    <% seats.forEach(seat => { %>
+                        <label class="seat <%= seat.booked ? 'booked' : '' %>">
+                            <input type="checkbox" name="seats" value="<%= seat.id %>" 
+                                   <%= seat.booked ? 'disabled' : '' %> hidden>
+                            <span><%= seat.row %><%= seat.number %></span>
+                        </label>
+                    <% }); %>
+                <% } else { %>
+                    <p>No seats available</p>
+                <% } %>
+            </div>
+            
+            <button type="submit">Book Selected Seats</button>
         </form>
     </div>
+
+    <script>
+        document.querySelectorAll('.seat:not(.booked)').forEach(seat => {
+            seat.addEventListener('click', () => {
+                const checkbox = seat.querySelector('input');
+                checkbox.checked = !checkbox.checked;
+                seat.classList.toggle('selected', checkbox.checked);
+            });
+        });
+    </script>
 </body>
 </html>

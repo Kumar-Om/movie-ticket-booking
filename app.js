@@ -5,29 +5,26 @@ import dotenv from "dotenv";
 import bcrypt from "bcrypt";
 import session from "express-session";
 
-dotenv.config(); // Load environment variables
+dotenv.config();
 
 const app = express();
 const PORT = 3000;
 
-// Set EJS as the view engine
 app.set("view engine", "ejs");
-
-// Middleware
 app.use(express.static("public"));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(session({
-    secret: 'your_secret_key', // Replace with a real secret key
+    secret: process.env.SESSION_SECRET || 'your_secret_key',
     resave: false,
     saveUninitialized: true
 }));
 
-// MySQL Database Connection
 const db = mysql.createConnection({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
+    multipleStatements: true
 });
 
 db.connect(err => {
@@ -37,179 +34,228 @@ db.connect(err => {
     }
     console.log("Connected to MySQL database");
 
-    // Reset total_seats_booked to 0 for all movies on server start
-    db.query("UPDATE movies SET total_seats_booked = 0", (err, result) => {
-        if (err) {
-            console.error("Error resetting seat count:", err.message);
-        } else {
-            console.log("All movie seat counts have been reset to 0.");
-        }
+    // Initialize database schema
+    db.query(`
+        CREATE TABLE IF NOT EXISTS seats (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            movie_id INT,
+            seat_row CHAR(1),
+            seat_number INT,
+            UNIQUE(movie_id, seat_row, seat_number),
+            FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE CASCADE
+        );
+        
+        CREATE TABLE IF NOT EXISTS booked_seats (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            booking_id INT,
+            seat_id INT,
+            FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE,
+            FOREIGN KEY (seat_id) REFERENCES seats(id) ON DELETE CASCADE
+        );
+    `, (err) => {
+        if (err) console.error("Error creating seat tables:", err.message);
     });
 });
 
-// Home Page - Fetch Movies
+// Existing routes (login, register, home, etc.)
 app.get("/", (req, res) => {
     db.query("SELECT * FROM movies", (err, results) => {
-        if (err) {
-            console.error("Error fetching movies:", err.message);
-            return res.status(500).send("Error fetching movies");
-        }
+        if (err) return res.status(500).send("Error fetching movies");
         res.render("home", { movies: results, user: req.session.user });
     });
 });
 
-// Login Page
-app.get('/login', (req, res) => {
-    res.render('login');
-});
+app.get('/login', (req, res) => res.render('login'));
+app.get('/register', (req, res) => res.render('register'));
+app.get('/logout', (req, res) => req.session.destroy(() => res.redirect('/')));
 
-// Login Process
 app.post('/login', (req, res) => {
     const { email, password } = req.body;
     db.query('SELECT * FROM users WHERE email = ?', [email], async (error, results) => {
-        if (error) {
-            console.error(error);
-            return res.status(500).send('Error logging in');
-        }
-        if (results.length > 0) {
-            const comparison = await bcrypt.compare(password, results[0].password);
-            if (comparison) {
-                req.session.user = results[0];
-                res.redirect('/');
-            } else {
-                res.send('Incorrect password');
-            }
+        if (error) return res.status(500).send('Error logging in');
+        if (results.length === 0) return res.send('User not found');
+        
+        const user = results[0];
+        if (await bcrypt.compare(password, user.password)) {
+            req.session.user = user;
+            res.redirect('/');
         } else {
-            res.send('User not found');
+            res.send('Incorrect password');
         }
     });
 });
 
-// Registration Page
-app.get('/register', (req, res) => {
-    res.render('register');
-});
-
-// Registration Process
 app.post('/register', async (req, res) => {
     const { name, email, phone, password } = req.body;
-    const hashedPassword = await bcrypt.hash(password, 10);
-    db.query('INSERT INTO users (name, email, phone, password) VALUES (?, ?, ?, ?)', 
-        [name, email, phone, hashedPassword], 
-        (error, results) => {
-            if (error) {
-                console.error(error);
-                return res.status(500).send('Error registering user');
-            }
-            res.redirect('/login');
-        }
-    );
+    try {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        db.query('INSERT INTO users SET ?', 
+            { name, email, phone, password: hashedPassword }, 
+            (error) => error ? res.status(500).send('Error registering user') : res.redirect('/login')
+        );
+    } catch (err) {
+        res.status(500).send('Error registering user');
+    }
 });
 
-// Logout
-app.get('/logout', (req, res) => {
-    req.session.destroy((err) => {
-        if (err) {
-            console.error("Error destroying session:", err);
-        }
-        res.redirect('/');
-    });
-});
-
-// Movie Details Page
+// Updated Movie Details Route with Seat Selection
 app.get("/movies/:id", (req, res) => {
     const movieId = req.params.id;
-    db.query("SELECT * FROM movies WHERE id = ?", [movieId], (err, result) => {
-        if (err || result.length === 0) {
-            console.error("Error fetching movie details:", err?.message || "Movie not found");
+    const query = `
+        SELECT m.*, 
+               s.id AS seat_id,
+               s.seat_row,
+               s.seat_number,
+               EXISTS(SELECT 1 FROM booked_seats WHERE seat_id = s.id) AS booked
+        FROM movies m
+        LEFT JOIN seats s ON m.id = s.movie_id
+        WHERE m.id = ?
+        ORDER BY s.seat_row, s.seat_number
+    `;
+
+    db.query(query, [movieId], (err, results) => {
+        if (err || results.length === 0) {
             return res.status(404).send("Movie not found");
         }
-        res.render("movies", { movie: result[0], user: req.session.user });
+
+        const movie = results[0];
+        const seats = results
+            .filter(row => row.seat_id) // Remove null seats
+            .map(row => ({
+                id: row.seat_id,
+                row: row.seat_row,
+                number: row.seat_number,
+                booked: Boolean(row.booked)
+            }));
+
+        res.render("movies", { 
+            movie: {
+                ...movie,
+                total_seats_booked: movie.total_seats_booked,
+                availableSeats: 100 - movie.total_seats_booked
+            },
+            seats,
+            user: req.session.user 
+        });
     });
 });
 
-// Handle Booking Requests
+// Updated Booking Route with Seat Selection
 app.post("/book", (req, res) => {
-    if (!req.session.user) {
-        return res.redirect('/login');
-    }
+    if (!req.session.user) return res.redirect('/login');
     const { movieId, seats } = req.body;
+    const seatIds = Array.isArray(seats) ? seats : [seats];
 
-    db.query("SELECT total_seats_booked FROM movies WHERE id = ?", [movieId], (err, result) => {
-        if (err || result.length === 0) {
-            console.error("Error checking available seats:", err?.message || "Movie not found");
-            return res.status(500).send("Error checking available seats");
-        }
+    db.beginTransaction(err => {
+        if (err) return res.status(500).send("Transaction error");
 
-        const totalBooked = result[0].total_seats_booked;
-        const maxSeats = 100;
-
-        if (totalBooked + parseInt(seats, 10) > maxSeats) {
-            return res.send("Not enough seats available for this movie.");
-        }
-
-        db.query(
-            "UPDATE movies SET total_seats_booked = ? WHERE id = ?",
-            [totalBooked + parseInt(seats, 10), movieId],
-            (updateErr) => {
-                if (updateErr) {
-                    console.error("Error updating seat count:", updateErr.message);
-                    return res.status(500).send("Error updating seat count");
-                }
-
-                db.query(
-                    "INSERT INTO bookings (movie_id, user_id, seats) VALUES (?, ?, ?)",
-                    [movieId, req.session.user.id, parseInt(seats, 10)],
-                    (insertErr) => {
-                        if (insertErr) {
-                            console.error("Error inserting booking record:", insertErr.message);
-                            return res.status(500).send("Error inserting booking record");
-                        }
-
-                        db.query("SELECT * FROM movies WHERE id = ?", [movieId], (fetchErr, updatedResult) => {
-                            if (fetchErr || updatedResult.length === 0) {
-                                console.error("Error fetching updated movie details:", fetchErr?.message || "Movie not found");
-                                return res.status(404).send("Movie not found");
-                            }
-                            res.render("confirmation", { movie: updatedResult[0], seats, user: req.session.user });
-                        });
-                    }
-                );
+        // 1. Check seat availability
+        db.query(`
+            SELECT s.id 
+            FROM seats s
+            LEFT JOIN booked_seats bs ON s.id = bs.seat_id
+            WHERE s.id IN (?)
+            AND bs.id IS NULL
+        `, [seatIds], (err, availableSeats) => {
+            if (err) return rollback(res, err);
+            if (availableSeats.length !== seatIds.length) {
+                return rollback(res, "Some seats are already booked");
             }
-        );
+
+            // 2. Create booking
+            db.query(`
+                INSERT INTO bookings (movie_id, user_id, seats)
+                VALUES (?, ?, ?)
+            `, [movieId, req.session.user.id, seatIds.length], 
+            (err, bookingResult) => {
+                if (err) return rollback(res, err);
+                
+                const bookingId = bookingResult.insertId;
+                const bookedSeats = seatIds.map(seatId => [bookingId, seatId]);
+                
+                // 3. Reserve seats
+                db.query(`
+                    INSERT INTO booked_seats (booking_id, seat_id)
+                    VALUES ?
+                `, [bookedSeats], (err) => {
+                    if (err) return rollback(res, err);
+                    
+                    // 4. Update movie seat count
+                    db.query(`
+                        UPDATE movies 
+                        SET total_seats_booked = total_seats_booked + ?
+                        WHERE id = ?
+                    `, [seatIds.length, movieId], (err) => {
+                        if (err) return rollback(res, err);
+                        
+                        db.commit(err => {
+                            if (err) return rollback(res, err);
+                            res.redirect(`/confirmation/${bookingId}`);
+                        });
+                    });
+                });
+            });
+        });
     });
 });
 
-// User Bookings Page
+// New Confirmation Route
+app.get("/confirmation/:id", (req, res) => {
+    db.query(`
+        SELECT m.title, b.seats, 
+               GROUP_CONCAT(CONCAT(s.seat_row, s.seat_number)) AS seat_numbers
+        FROM bookings b
+        JOIN movies m ON b.movie_id = m.id
+        JOIN booked_seats bs ON b.id = bs.booking_id
+        JOIN seats s ON bs.seat_id = s.id
+        WHERE b.id = ?
+        GROUP BY b.id
+    `, [req.params.id], (err, results) => {
+        if (err || results.length === 0) return res.status(404).send("Booking not found");
+        const booking = results[0];
+        res.render("confirmation", {
+            movie: { title: booking.title },
+            seats: booking.seats,
+            seatNumbers: booking.seat_numbers.split(','),
+            user: req.session.user
+        });
+    });
+});
+
+// User Bookings Page (Updated with Seat Details)
 app.get('/my-bookings', (req, res) => {
-    if (!req.session.user) {
-        return res.redirect('/login');
-    }
+    if (!req.session.user) return res.redirect('/login');
     const query = `
-        SELECT 
-            m.title AS movie_name,
-            b.seats AS seats_booked,
-            b.booking_time AS booking_time
-        FROM 
-            bookings b
-        JOIN 
-            movies m ON b.movie_id = m.id
-        WHERE
-            b.user_id = ?
-        ORDER BY 
-            b.booking_time DESC;
-    `;
+        SELECT m.title, b.booking_time,
+               GROUP_CONCAT(CONCAT(s.seat_row, s.seat_number)) AS seats
+        FROM bookings b
+        JOIN movies m ON b.movie_id = m.id
+        JOIN booked_seats bs ON b.id = bs.booking_id
+        JOIN seats s ON bs.seat_id = s.id
+        WHERE b.user_id = ?
+        GROUP BY b.id
+        ORDER BY b.booking_time DESC`;
     
     db.query(query, [req.session.user.id], (err, results) => {
-        if (err) {
-            console.error("Error fetching bookings:", err.message);
-            return res.status(500).send("Error fetching bookings");
-        }
-        res.render('my-bookings', { bookings: results, user: req.session.user });
+        if (err) return res.status(500).send("Error fetching bookings");
+        res.render('my-bookings', { 
+            bookings: results.map(r => ({
+                ...r,
+                seats: r.seats.split(',')
+            })), 
+            user: req.session.user 
+        });
     });
 });
 
-// Start Server
+// Transaction rollback helper
+function rollback(res, error) {
+    db.rollback(() => {
+        console.error("Transaction rolled back:", error);
+        res.status(500).send("Booking failed: " + error);
+    });
+}
+
 app.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT}`);
 });
